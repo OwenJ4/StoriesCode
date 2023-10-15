@@ -1,7 +1,7 @@
 ## R script for story on electoral registration and deprivation ##
 ## By Owen Jones
 ## Date: 15/10/2023
-## Story Link:
+## Story Link: https://medium.com/@OwenJones2271/household-deprivation-may-be-reducing-political-engagement-in-the-uk-d7e2387e1c5d
 
 
 library(tidyverse)
