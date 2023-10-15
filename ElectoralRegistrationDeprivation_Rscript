@@ -1,0 +1,151 @@
+## R script for story on electoral registration and deprivation ##
+## By Owen Jones
+## Date: 15/10/2023
+## Story Link:
+
+
+library(tidyverse)
+library(stats)
+library(psych)
+library(ggplot2)
+library(data.table)
+#Note: If you do not have the aforementioned packages, they can be installed with install.packages("library name") 
+
+
+#DepDat = Household Deprivation data from 2021 Census. Available from: https://www.ons.gov.uk/datasets/TS011/editions/2021/versions/4
+# Include all households, England and Wales, dimensions of household deprivation, and Westminster parliamentary constituencies in filtered dataset.
+DepDat <- read_tsv(file = "TS011-2021-4-filtered-2023-10-13T10_40_14Z - Dataset.tsv", col_names = TRUE, )
+
+# -8 code in Household deprivation category codes is Does not apply
+# 1 code is no deprivation
+
+DepDatClean <- DepDat %>% filter(Household_deprivation_Code!=-8 & Household_deprivation_Code!=1)
+
+#Finding the sum of all households within a parliamentary constituency that has at least one dimension of deprivation
+
+SumDepDat <- aggregate(Observation ~ Westminster_Parliamentary_constituencies_Code, data = DepDatClean, sum)
+
+head(SumDepDat)
+
+# Areas with lots of deprived households may be areas with more households in general. To tackle this a ratio will be calculated with data from the 2021 Census
+
+DepDatTotal <- DepDat %>% filter(Household_deprivation_Code!=-8)
+DepDatTotal <- aggregate(Observation ~ Westminster_Parliamentary_constituencies_Code, data = DepDatTotal, sum)
+
+#Renaming constituency code and observation columns
+colnames(SumDepDat) <- c("Code", "DeprivedHouseholds")
+colnames(DepDatTotal) <- c("Code", "TotalHouseholds")
+#Merging deprivation datasets
+MergedDepDat <- merge(SumDepDat, DepDatTotal)
+#Creating a ratio
+MergedDepDat$DepRatio <- MergedDepDat$DeprivedHouseholds / MergedDepDat$TotalHouseholds
+
+
+# ESData = Electoral Statistics December 2022 Dataset. Available from:  https://www.ons.gov.uk/peoplepopulationandcommunity/elections/electoralregistration/datasets/electoralstatisticsforuk
+#An attainer (in this data set) is someone on the electoral roll who has turned 18 and would be eligible to vote in the next general election. 
+
+ESData <- read_tsv(file = "Electoral Registrations - Sheet1.tsv", col_names = TRUE)
+
+ESData$ElectoralRegChange <- ESData$Electoral_registrations_December_2022 - ESData$Electoral_registrations_December_2021
+
+ESData$AttainerChange <- ESData$Attainers_December_2022 - ESData$Attainers_December_2021
+
+head(ESData)
+
+#Combining data sets by constituency code
+
+CombDat <- merge(MergedDepDat, ESData)
+
+#Testing normality
+shapiro.test(CombDat$DepRatio)
+shapiro.test(CombDat$Electoral_registrations_December_2021)
+shapiro.test(CombDat$Electoral_registrations_December_2022)
+shapiro.test(CombDat$Attainers_December_2021)
+shapiro.test(CombDat$Attainers_December_2022)
+
+#The data may contain outliers. Z scores will be calculated and a cut off of -4 or +4 will be used to remove them due to sample size.
+
+CombDat$Electoral_registrations_December_2021Zscore <- (CombDat$Electoral_registrations_December_2021 - mean(CombDat$Electoral_registrations_December_2021))/ sd(CombDat$Electoral_registrations_December_2021)
+CombDat$AR2021Zscore <- (CombDat$Attainers_December_2021 - mean(CombDat$Attainers_December_2021))/ sd(CombDat$Attainers_December_2021) 
+
+CombDat <- CombDat %>% filter(Electoral_registrations_December_2021Zscore<4 & Electoral_registrations_December_2021Zscore>-4)
+CombDat <- CombDat %>% filter(AR2021Zscore<4 & AR2021Zscore>-4)
+
+#Is Census 2021 Household deprivation correlated with electoral registrations and attainers on the electoral roll?
+
+ERCor <- cor.test(x = CombDat$DepRatio, y = CombDat$Electoral_registrations_December_2021, alternative = c("two.sided"), method = c("pearson"), conf.level = 0.95)
+ERCor
+ARCor <- cor.test(x = CombDat$DepRatio, y = CombDat$Attainers_December_2021, alternative = c("two.sided"), method = c("pearson"), conf.level = 0.95)
+ARCor
+# Let's make the graphs more interesting by labeling the data points (which represent parliamentary constituencies) by political party to uncover unmeasured variables that might be influencing the correlation
+
+#PartyDat: party constituency data. available from: https://www.theyworkforyou.com/
+
+PartyDat <- read_tsv(file = "Constituency.tsv", col_names = TRUE,)
+colnames(PartyDat) <- c("Party", "Parliamentary_constituency")
+#Creating new data table to avoid losing cleaning steps of CombDat
+MergedDat <- merge(CombDat, PartyDat)
+
+#Creating labeled scatterplots
+
+#Ensuring there is a single regression line and not multiple per group
+ER2021lm_fit <- lm(Electoral_registrations_December_2021 ~ DepRatio, data = MergedDat)
+AR2021lm_fit <- lm(Attainers_December_2021 ~ DepRatio, data = MergedDat)
+broom::augment(ER2021lm_fit) %>% 
+  head()
+
+LabPlotER2021 <- ggplot(MergedDat, aes(x = DepRatio, y = Electoral_registrations_December_2021, col = Party)) + 
+  geom_point() + geom_line(data = broom::augment(ER2021lm_fit), aes(x = DepRatio, y = .fitted), colour = "black", size = 1) +
+  scale_color_manual(values = c("#0087DC", "#528D6B", "grey", "#E4003B", "#E4003B", "#FAA61A", "#005B54", "pink")) +
+  theme_classic(base_size = 18) + scale_x_continuous(name = "Proportion of deprived households in a constituency", breaks = seq(0.3, 0.8, 0.1)) + 
+  scale_y_continuous(name = "Electoral Registrations", breaks = seq(40000, 100000, 10000)) + ggtitle("A scatterplot of the negative correlation between electoral registrations in 2021 and the proportion of deprived households in a constituency")
+                                                                                                                                      
+LabPlotER2021
+
+LabPlotAR2021 <- ggplot(MergedDat, aes(x = DepRatio, y = Attainers_December_2021, col = Party)) + 
+  geom_point() + geom_line(data = broom::augment(AR2021lm_fit), aes(x = DepRatio, y = .fitted), colour = "black", size = 1) +
+  scale_color_manual(values = c("#0087DC", "#528D6B", "grey", "#E4003B", "#E4003B", "#FAA61A", "#005B54", "pink")) +
+  theme_classic(base_size = 18) + scale_x_continuous(name = "Proportion of deprived households in a constituency", breaks = seq(0.3, 0.8, 0.1)) +
+  scale_y_continuous(name = "Attainers on the Electoral Roll", breaks= seq(0, 800, 100)) + ggtitle("A scatterplot of the negative correlation between attainers on the electoral roll in 2021 and the proportion of deprived households in a constituency")
+
+LabPlotAR2021
+
+#There seems to be a  differentiation between Conservative MPs and Labour/Co-op MPs in Deprivation Ratio. 
+#Does Household Deprivation, Electoral Registration, Attainers predict Party affiliation?
+#Conservative will be coded as 0, and Labour/Co-Op will be coded as 1 
+
+#Creating new data.table
+PartyAnalysisDat <- MergedDat %>% filter(Party=="Conservative" | Party=="Labour" | Party=="Labour/Co-operative")
+#Creating dummy codes for categorical variable
+PartyAnalysisDat <- PartyAnalysisDat %>% mutate(PartyCode = case_when(Party=="Conservative" ~ 0, Party=="Labour" ~ 1, Party=="Labour/Co-operative" ~ 1))
+#Attempting to Normalising the electoral register, depratio with a log10
+#PartyAnalysisDat$LogDepRatio <- log10(PartyAnalysisDat$DepRatio)
+#PartyAnalysisDat$LogER2021 <- log10(PartyAnalysisDat$Electoral_registrations_December_2021)
+#PartyAnalysisDat$LogAR2021 <- log10(PartyAnalysisDat$Attainers_December_2021)
+#This made the data more skewed likely because the distribution is not log-normal
+
+#Visually examining normality
+histogramDepRatio <- ggplot(data = PartyAnalysisDat, mapping = aes(x = DepRatio)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666") 
+histogramDepRatio
+histogramER2021 <- ggplot(data = PartyAnalysisDat, mapping = aes(x = Electoral_registrations_December_2021)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666") 
+histogramER2021
+histogramAR2021 <- ggplot(data = PartyAnalysisDat, mapping = aes(x = Attainers_December_2021)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666") 
+histogramAR2021
+
+#Performing multiple regression analysis with constituency party (Conservative or Labour) as the outcome.
+Log.MRtest <- glm(formula = PartyCode ~ Electoral_registrations_December_2021 + DepRatio + Attainers_December_2021, data = PartyAnalysisDat, family = binomial(link = logit))
+summary(Log.MRtest)
+
+#Creating a logistic regression curve graph
+LogPlot <- ggplot(data = PartyAnalysisDat, mapping = aes(x = DepRatio, y = PartyCode)) + geom_point() + 
+  stat_smooth(method = "glm", color = "black", method.args=list(family = binomial), se = FALSE) +
+  theme_classic(base_size = 18) + scale_y_continuous(name = "Conservative (0) or Labour (1) constituencies", breaks=c(0, 1)) +
+  scale_x_continuous(name = "Proportion of deprived households in a constituency", breaks = seq(0.3, 0.8, 0.1)) +
+  ggtitle("Probability of a Conservative or Labour party constituency versus proportion of deprived households in the constituency")
+LogPlot
