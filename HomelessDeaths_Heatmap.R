@@ -1,7 +1,3 @@
-##############################################################################
-# Following tutorial found here: https://datatricks.co.uk/creating-maps-in-r #
-##############################################################################
-
 install.packages("maps")
 install.packages("mapdata")
 install.packages("maptools")
